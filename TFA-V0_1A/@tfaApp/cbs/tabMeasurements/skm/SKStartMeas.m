@@ -1,0 +1,586 @@
+function SKStartMeas(app,~,~)
+    function         isIdle= w84Measurement(app,maxWait)
+            waitStep = .25;
+            elapsed = 0;
+            isIdle = false;
+            while elapsed < maxWait
+                try
+                    write(app.tcpTF, "STRING:STATU?"); 
+                    statusResp = read(app.tcpTF);
+                    if ~ischar(statusResp) && ~isstring(statusResp)
+                        statusResp = char(statusResp);
+                    end
+                    idcs = strfind(statusResp, 'STRING:');
+                    lastIdx = idcs(end);
+                    lastResp = statusResp(lastIdx:end);
+                    if ~isempty(lastResp) && contains(lastResp, 'IDLE')
+                        isIdle = true;
+                        break;
+                    end
+                catch ME_status
+                    disp(['Status query error: ' ME_status.message]);
+                end
+                    pause(waitStep);
+                    elapsed = elapsed + waitStep;
+            end
+    end
+    
+    app.measRunning = true;
+    app.measStopped = false;
+    amplifier = app.SKAmplifierDropDown.Value;
+
+    % skMode = app.SKMode.Value;
+    if strcmpi(amplifier,'FE-HeadAmp')
+        SetWaveform = 2;
+    elseif strcmpi(amplifier,'HV-Amp')
+        SetWaveform = 0;
+    end
+    ResetWaveform  = app.SKResetWaveformDropDown.Value;
+    SmAmpWaveform = 0;
+    
+    wam = app.SKwamEditField.Value;
+    [wpu0, app.SKwpu0EditField.Value,app.SKwpu0Unit.Text] = convertSeconds(app.SKwpu0EditField.Value,app.SKwpu0Unit.Text);
+    [wpuN,app.SKwpuNEditField.Value,app.SKwpuNUnit.Text] = convertSeconds(app.SKwpuNEditField.Value,app.SKwpuNUnit.Text);
+    [wri,app.SKwriEditField.Value,app.SKwriUnit.Text] = convertSeconds(app.SKwriEditField.Value,app.SKwriUnit.Text);
+    [del2read,app.SKdel2readEditField.Value,app.SKdel2readUnit.Text] = convertSeconds(app.SKdel2readEditField.Value,app.SKdel2readUnit.Text);
+    
+    amp = app.SKampEditField.Value;
+    if ResetWaveform==0
+       if app.SKrpuEditField.Value==app.SKrpuEditField.Value
+          [rri,app.SKrpuEditField.Value,app.SKrpuUnit.Text] = convertSeconds(app.SKrpuEditField.Value,app.SKrpuUnit.Text);
+       else 
+           error("For Trapezoidial waveforms the risetime and pulsewidth must be the same.")
+       end
+    elseif ResetWaveform==1
+        [rri,app.SKrriEditField.Value,app.SKrriUnit.Text] = convertSeconds(app.SKrriEditField.Value,app.SKrriUnit.Text);
+    elseif ResetWaveform == 2
+        [rri,app.SKrpuEditField.Value,app.SKrpuUnit.Text] = convertSeconds(app.SKrpuEditField.Value,app.SKrpuUnit.Text);
+    end
+    [delayt,app.SKdelaytEditField.Value,app.SKdelaytUnit.Text] = convertSeconds(app.SKdelaytEditField.Value,app.SKdelaytUnit.Text);
+
+    
+    smamp = app.SKSmAmpampEditField.Value;
+    if ResetWaveform==0
+       if app.SKSmAmprpuEditField.Value==app.SKSmAmprpuEditField.Value
+          [smrri,app.SKSmAmprpuEditField.Value,app.SKSmAmprpuUnit.Text] = convertSeconds(app.SKSmAmprpuEditField.Value,app.SKSmAmprpuUnit.Text);
+       else 
+           error("For Trapezoidial waveforms the risetime and pulsewidth must be the same.")
+       end
+    elseif ResetWaveform==1
+        [smrri,app.SKSmAmprriEditField.Value,app.SKSmAmprriUnit.Text] = convertSeconds(app.SKSmAmprriEditField.Value,app.SKSmAmprriUnit.Text);
+    elseif ResetWaveform == 2
+        [smrri,app.SKSmAmprpuEditField.Value,app.SKSmAmprpuUnit.Text] = convertSeconds(app.SKSmAmprpuEditField.Value,app.SKSmAmprpuUnit.Text);
+    end
+    [smdelayt,app.SKSmAmpdelaytEditField.Value,app.SKSmAmpdelaytUnit.Text] = convertSeconds(app.SKSmAmpdelaytEditField.Value,app.SKSmAmpdelaytUnit.Text);
+    
+    setDir = app.SKSetDir.Value;
+    
+    setcurrRange = app.SKCuRangeDropDown.Value;
+    smcurrRange = app.SKSmAmpCuRangeDropDown.Value;
+    resetcurrRange = app.SKResetCuRangeDropDown.Value;
+    numperDec = app.SKProcPerPWDecadeEditField.Value;
+    numperPW = app.SKProcPerPWEditField.Value;
+
+    baseName = app.SKbaseFileNameEditField.Value;
+
+    outFolder = app.SKoutFolderEditField.Value;
+    outFolder = regexprep(outFolder, '([^/])$', '$1/');
+
+    
+    
+
+
+
+
+
+
+    numberDiffPW = floor((log10(wpuN)-log10(wpu0))*numperDec+1);
+    pws = logspace(log10(wpu0),log10(wpuN), numberDiffPW);
+
+    pws = repelem(pws,numperPW);
+
+    sendCmdToClient(app,app.tcpTF,"STRING:parameter:pm:pulsesequence 1------",'logClosedl8r',true);
+    
+    
+
+    if setDir==1
+        if strcmpi(amplifier,'FE-HeadAmp')
+            setPulseSeq = "-X-----";
+        elseif strcmpi(amplifier,'HV-Amp')
+            setPulseSeq = "1------";
+        end
+        smallAmpPulseSeq = "-X-----";
+        resetLeakPulseSeq = "-YD----";
+    elseif setDir==-1
+        if strcmpi(amplifier,'FE-HeadAmp')
+            setPulseSeq = "-Y-----";
+        elseif strcmpi(amplifier,'HV-Amp')
+            setPulseSeq = "0------";
+        end
+        smallAmpPulseSeq = "-Y-----";
+        resetLeakPulseSeq = "-XU----";
+    end
+    
+    
+    
+    sampleInf="STRING:sam:para:name "+app.SampleNameEditField.Value+newline + ...
+                "STRING:sam:para:are "+app.PadAreaEditField.Value+newline + ...
+                "STRING:sam:para:thi "+app.ThicknessEditField.Value+newline+newline;    
+
+    clear_modePM=newline + ...
+        "STRING:clear" + newline + ...
+        "STRING:mode PM" + newline;
+
+    % text 4 fixed set params: 
+    if strcmpi(amplifier,'FE-HeadAmp')
+        setParams = sprintf("STRING:parameter:pm:waveform %s;" + ...
+            "pulsesequence %s;" + ...
+            "amp %s;" + ...
+            "delayt %s;" + ...
+            "curr %s;", ...
+            string(SetWaveform),string(setPulseSeq),string(wam),string(del2read),string(setcurrRange));
+
+        display(setParams);
+    elseif strcmpi(amplifier,'HV-Amp')
+            setParams = sprintf("STRING:parameter:pm:waveform %s;" + ...
+            "pulsesequence %s;" + ...
+            "wam %s;" + ...
+            "read %s;" + ...
+            "wri %s;" + ...
+            "curr 1;", ...
+            string(SetWaveform),string(setPulseSeq),string(wam),string(del2read),string(wri));
+            display(setParams);
+    end
+    % text 4 fixed small amp params: 
+    smallAmpParams = sprintf("STRING:parameter:pm:waveform %s;" + ...
+        "pulsesequence %s;" + ...
+        "amp %s;" + ...
+        "rri %s;" + ... 
+        "delayt %s;" + ...
+        "curr %s;", ...
+        string(SmAmpWaveform),string(smallAmpPulseSeq),string(smamp),string(smrri),string(smdelayt),string(smcurrRange));
+
+    % text 4 fixed reset params: 
+    resetParams = sprintf("STRING:parameter:pm:waveform %s;" + ...
+        "pulsesequence %s;" + ...
+        "amp %s;" + ...
+        "rri %s;" + ... 
+        "delayt %s;" + ...
+        "curr %s;", ...
+        string(ResetWaveform),string(resetLeakPulseSeq),string(amp),string(rri),string(delayt),string(resetcurrRange));
+    
+    % Open Log-File
+    app.logFileID = fopen(app.logPath, 'a');
+        if app.logFileID == -1
+            error('Cannot open log file.');
+        end
+    
+    assignin('base','logfID',app.logFileID);
+    % Send your sample Information
+    sendCmdToClient(app,app.tcpTF, sampleInf,'logClosedl8r',true);
+    w84TF(app); %wait for TFA
+    
+    
+
+    app.swKinSetDataBuffer = cell(1,numel(pws));
+    app.swKinSmAmpDataBuffer = cell(1,numel(pws));
+    app.swKinResetDataBuffer = cell(1,numel(pws));
+    createFile = true;
+
+
+    polvals = zeros(1,numel(pws));
+    currvals = zeros(1,numel(pws));
+    yyaxis(app.SKQuickView,'left'); cla(app.SKQuickView)   % clears left side
+    yyaxis(app.SKQuickView,'right'); cla(app.SKQuickView)  % clears right side
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    % if ~app.measRunning
+    %     sendCmdToClient(app,app.tcpTF,"STRING:stop",'logClosedl8r',true);
+    %     app.SKStartMeasButton.Text = 'Start SKM';
+    %     app.SKStartMeasButton.Enable = 'on';
+    % return 
+    % end
+    % % Pre-Pol
+    % pause(0.3)
+    %         sendCmdToClient(app,app.tcpTF,clear_modePM,'logClosedl8r',true);
+    % % Set param for the Set-Pulse
+    %         sendCmdToClient(app,app.tcpTF,resetParams,'logClosedl8r',true);
+    %         pause(0.05)
+    % % Start Measuring:
+    %         sendCmdToClient(app,app.tcpTF,"STRING:start ",'logClosedl8r',true);
+    % % Wait until TFA is in IDLE
+    %         isIdle = false;
+    %         while ~isIdle %
+    %             isIdle = w84Measurement(app,5);
+    %             if isIdle
+    %                 break
+    %             end
+    %             disp("Measurement still ongoing. Wait again until TFA is in Idle.");
+    %         end
+    
+            pause(2)
+    for idx=1:numel(pws) % For the length of Pulsewidth array
+% Clear all measurements in the TFA
+sendCmdToClient(app,app.tcpTF,clear_modePM,'logClosedl8r',true);
+pause(0.5)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        if app.measStopped
+            sendCmdToClient(app,app.tcpTF,"STRING:stop",'logClosedl8r',true);
+            app.SKStartMeasButton.Text = 'Start SKM';
+            app.SKStartMeasButton.Enable = 'on';
+            fclose(app.logFileID);
+            app.logFileID = [];
+            break 
+        end
+ % SET Procedure
+        filenameSet = sprintf("%s_SetAmp_%.2f_set",baseName,wam);
+        filenameSet = replace(filenameSet,".","p");
+        filePathSet = fullfile(outFolder,filenameSet);
+        
+
+        if ~createFile && strcmpi(amplifier,'FE-HeadAmp')
+            sendCmdToClient(app,app.tcpTF,"STRING:File:open ",'value',""""+filePathSet+".tfp""",'logClosedl8r',true);
+        end
+% Set param for the Set-Pulse
+        sendCmdToClient(app,app.tcpTF,setParams,'logClosedl8r',true);
+
+        if strcmpi(amplifier,'FE-HeadAmp')
+            sendCmdToClient(app,app.tcpTF,"STRING:para:pm:rri ",'value',pws(idx));
+        elseif strcmpi(amplifier,'HV-Amp')
+        end
+        
+        sendCmdToClient(app,app.tcpTF,"STRING:para:pm:wpu ",'value',pws(idx)); 
+        pause(0.05)
+% Start Measuring:
+        sendCmdToClient(app,app.tcpTF,"STRING:start ",'logClosedl8r',true);
+% Wait until TFA is in IDLE
+        isIdle = false;
+        while ~isIdle %
+            isIdle = w84Measurement(app,pws(idx)+5);
+            if isIdle
+                break
+            end
+            disp("Measurement still ongoing. Wait again until TFA is in Idle.");
+        end
+        pause(pws(idx)+3)
+
+        if strcmpi(amplifier,'FE-HeadAmp')
+% If I did everything right, then the current index "idx" is also the
+% Measurement ID of this File. Therefore, I dont have to ask for
+% measurem:count? and directly select the measurement
+            sendCmdToClient(app,app.tcpTF,sprintf("STRING:measurem:selec pm,%d",idx));
+            pause(0.2);
+% Now I can get the Data. 
+            pause(0.1);
+            elapsed = 0;
+            maxWait = 3;
+            while elapsed<maxWait
+                try 
+                sendCmdToClient(app,app.tcpTF,"STRING:measurem:data?");
+                resp=read(app.tcpTF);
+                if ~isempty(resp)
+                    resp = char(resp);
+                    diffRespStart = strfind(resp, 'STRING:'); 
+                    lastRespIdx = diffRespStart(end);
+                    lastRespData = resp(lastRespIdx:end);
+                    if contains(lastRespData,"Measurement Status:")
+% Trade-Off RAM usage vs overhead. I decided for more overhead and less RAM
+% usage
+                            uint8Data = unicode2native(lastRespData, 'UTF-8');
+                            dataReceived(app,uint8Data,'mode','skmSet');
+                            app.swKinSetDataBuffer{idx} = uint8Data;
+                            break
+                    end
+                end
+                catch me 
+                    warning("Received Data could not be processed. I'll try again.")
+                end
+                elapsed = elapsed + 0.1;
+                pause(0.1)
+            end
+                sendCmdToClient(app,app.tcpTF,"STRING:File:Save ",'value',""""+filePathSet+"""",'logClosedl8r',true);
+                w84TF(app);
+                sendCmdToClient(app,app.tcpTF,"STRING:File:Export ",'value',""""+filePathSet+".dat""",'logClosedl8r',true);
+                w84TF(app);
+        elseif strcmpi(amplifier,'HV-Amp')
+        end
+
+        
+        
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    if app.SKSmAmpCheckBox.Value
+        if app.measStopped
+            sendCmdToClient(app,app.tcpTF,"STRING:stop",'logClosedl8r',true);
+            app.SKStartMeasButton.Text = 'Start SKM';
+            app.SKStartMeasButton.Enable = 'on';
+            fclose(app.logFileID);
+            app.logFileID = [];
+            break 
+        end
+        pause(0.3)
+        sendCmdToClient(app,app.tcpTF,clear_modePM,'logClosedl8r',true);
+ % Small Amplitude Procedure
+        filenamesmAmp = sprintf("%s_SetAmp_%.2f_smallAmp",baseName,wam);
+        filenamesmAmp = replace(filenamesmAmp,".","p");
+        filePathsmAmp = fullfile(outFolder,filenamesmAmp);
+
+        if ~createFile
+            sendCmdToClient(app,app.tcpTF,"STRING:File:open ",'value',""""+filePathsmAmp+".tfp""",'logClosedl8r',true);
+        end
+
+% SmallAmp param for the Set-Pulse
+        sendCmdToClient(app,app.tcpTF,smallAmpParams,'logClosedl8r',true);
+pause(0.05)
+% give set pulse information, by giving parameters for write pulse
+notExistingwritePulse = sprintf("STRING:parameter:pm wam %s;" + ...
+            "wpu %s;" + ...
+            "read %s;" + ...
+            "wri %s;" + ...
+            string(wam),string(pws(idx)),string(del2read),string(wri));
+
+sendCmdToClient(app,app.tcpTF,notExistingwritePulse); % No purpose, but good for meta inf eval.
+        pause(0.05)
+% Start Measuring:
+        sendCmdToClient(app,app.tcpTF,"STRING:start ",'logClosedl8r',true);
+% Wait until TFA is in IDLE
+        isIdle = false;
+        while ~isIdle %
+            isIdle = w84Measurement(app,5);
+            if isIdle
+                break
+            end
+            disp("Measurement still ongoing. Wait again until TFA is in Idle.");
+        end
+       pause(3)
+% If I did everything right, then the current index "idx" is also the
+% Measurement ID of this File. Therefore, I dont have to ask for
+% measurem:count? and directly select the measurement
+        sendCmdToClient(app,app.tcpTF,"STRING:measurem:selec pm,",'value',idx);
+        pause(0.05);
+% Now I can get the Data. 
+        elapsed = 0;
+        maxWait = 3;
+        while  elapsed<maxWait
+            try
+                sendCmdToClient(app,app.tcpTF,"STRING:measurem:data?");
+                pause(0.1);
+                resp=read(app.tcpTF);
+                if ~isempty(resp)
+                    resp = char(resp);
+                    diffRespStart = strfind(resp, 'STRING:');
+                    lastRespIdx = diffRespStart(end);
+                    lastRespData = resp(lastRespIdx:end);
+                    if contains(lastRespData,"Measurement Status:")
+    % Trade-Off RAM usage vs overhead. I decided for more overhead and less RAM
+    % usage%.2f_
+                        uint8Data = unicode2native(lastRespData, 'UTF-8');
+                        dataReceived(app,uint8Data,'mode','skmSmAmp');
+                        app.swKinSmAmpDataBuffer{idx} = uint8Data;
+                        break
+                    end
+                end
+            catch me 
+                warning("Received Data could not be processed. I'll try again.")
+            end
+            elapsed = elapsed + 0.1;
+            pause(0.1)
+        end
+        
+   
+        sendCmdToClient(app,app.tcpTF,"STRING:File:Save ",'value',""""+filePathsmAmp+"""",'logClosedl8r',true);
+        w84TF(app);
+        sendCmdToClient(app,app.tcpTF,"STRING:File:Export ",'value',""""+filePathsmAmp+".dat""",'logClosedl8r',true);
+        w84TF(app);
+        
+
+        [~,dataTab]=processData(uint8Data);
+        mask4cond= dataTab.Time1>smrri*1.2&dataTab.Time1<smrri*1.9;% Between 20% and 90% of holding the amplitude
+        SmAmpCurrent = mean(dataTab.I1(mask4cond));
+    end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        if app.measStopped
+            sendCmdToClient(app,app.tcpTF,"STRING:stop",'logClosedl8r',true);
+            app.SKStartMeasButton.Text = 'Start SKM';
+            app.SKStartMeasButton.Enable = 'on';
+            fclose(app.logFileID);
+            app.logFileID = [];
+            break 
+        end
+        pause(0.3)
+        sendCmdToClient(app,app.tcpTF,clear_modePM,'logClosedl8r',true);
+ % RESET + Leakage Procedure
+        filenameReset = sprintf("%s_SetAmp_%.2f_reset",baseName,wam);
+        filenameReset = replace(filenameReset,".","p");
+        filePathReset = fullfile(outFolder,filenameReset);
+
+        if ~createFile
+            sendCmdToClient(app,app.tcpTF,"STRING:File:open ",'value',""""+filePathReset+".tfp""",'logClosedl8r',true);
+        end
+% Set param for the Set-Pulse
+        sendCmdToClient(app,app.tcpTF,resetParams,'logClosedl8r',true);
+        pause(0.05)
+% give set pulse information, by giving parameters for write pulse
+notExistingwritePulse = sprintf("STRING:parameter:pm wam %s;" + ...
+            "wpu %s;" + ...
+            "read %s;" + ...
+            "wri %s;" + ...
+            string(wam),string(pws(idx)),string(del2read),string(wri));
+
+sendCmdToClient(app,app.tcpTF,notExistingwritePulse); % No purpose, but good for meta inf eval.
+pause(0.05)
+% Start Measuring:
+        sendCmdToClient(app,app.tcpTF,"STRING:start ",'logClosedl8r',true);
+% Wait until TFA is in IDLE
+        isIdle = false;
+        while ~isIdle %
+            isIdle = w84Measurement(app,5);
+            if isIdle
+                break
+            end
+            disp("Measurement still ongoing. Wait again until TFA is in Idle.");
+        end
+       pause(3)
+
+% If I did everything right, then the current index "idx" is also the
+% Measurement ID of this File. Therefore, I dont have to ask for
+% measurem:count? and directly select the measurement
+        sendCmdToClient(app,app.tcpTF,"STRING:measurem:selec pm,",'value',idx);
+        pause(0.05);
+% Now I can get the Data. 
+        elapsed = 0;
+        maxWait = 3;
+        while elapsed<maxWait
+            try
+                sendCmdToClient(app,app.tcpTF,"STRING:measurem:data?");
+                pause(0.1);
+                resp=read(app.tcpTF);
+                if ~isempty(resp)
+                    resp = char(resp);
+                    diffRespStart = strfind(resp, 'STRING:');
+                    lastRespIdx = diffRespStart(end);
+                    lastRespData = resp(lastRespIdx:end);
+                    if contains(lastRespData,"Measurement Status:")
+    % Trade-Off RAM usage vs overhead. I decided for more overhead and less RAM
+    % usage 
+                        uint8Data = unicode2native(lastRespData, 'UTF-8');
+                        dataReceived(app,uint8Data,'mode','skmReset');
+                        app.swKinResetDataBuffer{idx} = uint8Data;
+                        break
+                    end
+                end
+            catch me 
+                warning("Received Data could not be processed. I'll try again.")
+            end
+            elapsed = elapsed + 0.1;
+            pause(0.1)
+        end
+        
+        sendCmdToClient(app,app.tcpTF,"STRING:File:Save ",'value',""""+filePathReset+"""",'logClosedl8r',true);
+        w84TF(app);
+        sendCmdToClient(app,app.tcpTF,"STRING:File:Export ",'value',""""+filePathReset+".dat""",'logClosedl8r',true);
+        w84TF(app);
+         createFile = false;
+     % For Quick Look
+        
+        [~,dataTab]=processData(uint8Data);
+        polvals(idx) = abs(dataTab.P1(1));
+        if app.SKSmAmpCheckBox.Value
+            currvals(idx)=SmAmpCurrent;
+        end
+        
+        if numperPW>1 % We will need an errorBar instead of simple line plot
+            if mod(idx,numperPW)==0
+                % get unique x and group statistics
+                xu = unique(pws);
+                n = numel(xu);
+                polvals_mean = zeros(size(xu));
+                polvals_std  = zeros(size(xu));
+                if app.SKSmAmpCheckBox.Value
+                    currvals_mean = zeros(size(xu));
+                    currvals_std  = zeros(size(xu));
+                end
+                for k = 1:n
+                    mask = pws == xu(k);
+                    yk = polvals(mask);
+                    polvals_mean(k) = mean(yk);
+                    polvals_std(k)  = std(yk);            % use std, or sem = std(yk)/sqrt(numel(yk))
+                    if app.SKSmAmpCheckBox.Value
+                        yk2 = currvals(mask);
+                        currvals_mean(k) = mean(yk2);
+                        currvals_std(k)  = std(yk2); 
+                    end
+                end
+                yyaxis(app.SKQuickView,'left'); cla(app.SKQuickView)   % clears left side
+                hold(app.SKQuickView,'on');
+                errorbar(app.SKQuickView,xu, polvals_mean, polvals_std, 'o-', 'LineWidth', 1.2, 'MarkerSize', 6);
+                
+                yyaxis(app.SKQuickView,'right'); cla(app.SKQuickView)  % clears right side
+                if app.SKSmAmpCheckBox.Value
+                    hold(app.SKQuickView,'on');
+                    errorbar(app.SKQuickView,xu, currvals_mean, currvals_std, 'Marker','square', 'LineStyle', 'none', 'MarkerSize', 6);
+                end
+            end
+
+        else
+            yyaxis(app.SKQuickView,'left'); cla(app.SKQuickView)   % clears left side
+            plot(app.SKQuickView, pws, polvals);
+            hold(app.SKQuickView,'on');
+
+            yyaxis(app.SKQuickView,'right'); cla(app.SKQuickView)  % clears right side
+            if app.SKSmAmpCheckBox.Value
+                plot(app.SKQuickView, pws, currvals,'LineStyle','none','Marker','square');
+                hold(app.SKQuickView,'on');
+            end
+        end
+        % assume app.UIAxes contains plotted data
+        
+            ax = app.SKQuickView;
+            if min(pws)==max(pws)
+                ax.XLim = [min(pws),min(pws)+0.1*min(pws)];
+            else
+                ax.XLim = [min(pws),max(pws)];
+            end
+            yyaxis(app.SKQuickView,'left');
+            ylim(app.SKQuickView,[min(min(polvals),0),max(max(polvals),0)]);
+            if app.SKSmAmpCheckBox.Value
+                yyaxis(app.SKQuickView,'right');
+                ylim(app.SKQuickView,[min(min(currvals),0),max(max(currvals),0)]);
+            end
+            % get current limits
+            xl = ax.XLim;
+            yl = ax.YLim;
+            
+            padFrac = 0.05; % 5% padding each side
+            dx = diff(xl);
+            dy = diff(yl);
+            
+            ax.XLim = [xl(1) - padFrac*dx, xl(2) + padFrac*dx];
+            ax.YLim = [yl(1) - padFrac*dy, yl(2) + padFrac*dy];
+            
+    end
+
+
+
+    concatData = cat(1,app.swKinSetDataBuffer,app.swKinSmAmpDataBuffer,app.swKinResetDataBuffer);
+    assignin('base','catData',concatData);
+    
+    dataObj = SwKinData(concatData);
+    
+    
+
+
+
+
+    assignin("base","app",app)
+    fclose(app.logFileID);
+    app.logFileID = [];
+
+    app.SKStartMeasButton.Text = 'Start SKM';
+    app.SKStartMeasButton.Enable = 'on';
+    app.measRunning = false;
+    app.measStopped = false;
+    
+
+
+
+end

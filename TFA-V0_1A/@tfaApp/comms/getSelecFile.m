@@ -1,0 +1,63 @@
+function [ID, Path, Mode] = getSelecFile(app)
+if ~app.echo
+    count = 0;
+    err_count = 0;
+    max_tries= 3;
+    while count==err_count && err_count<max_tries
+        try
+            sendCmdToClient(app, app.tcpTF, "STRING:File:Selec?");
+            w84TF(app);
+            raw = char(read(app.tcpTF));     % raw may contain one or more lines
+        catch me
+            err_count = err_count+1;
+            warning(sprintf("Try %d: %s",err_count,me.message));
+        end
+        if raw=="STRING:IDLE"
+            err_count = err_count+1;
+            warning(sprintf("Try %d: %s",err_count,"Selec? not successful"));
+        end
+        count = count +1;
+    end
+    if err_count == max_tries
+        ID = [];
+        Path = {};
+        Mode = {};
+        return
+    end
+    % Split into lines and trim
+    lines = regexp(raw, '\r?\n', 'split');
+    lines = strtrim(lines);
+    lines = lines(~cellfun(@isempty, lines));
+    
+    % Regex: optional "STRING:" prefix, then "File ID: <digits>-<path>, Measurement mode: <mode>"
+    tokenExpr = '^(?:STRING:)?\s*File\s+ID:\s*(\d+)-([^,]+),\s*Measurement\s+mode:\s*([A-Za-z]+)';
+    n = numel(lines);
+    ID = NaN(1,n);
+    Path = cell(1,n);
+    Mode = cell(1,n);
+
+    for k = 1:n
+        line = lines{k};
+        disp(line)
+        line = erase(line,"STRING:IDLE");
+        line = erase(line,"STRING:");
+        tk = regexp(line, tokenExpr, 'tokens', 'once', 'ignorecase');
+        if ~isempty(tk)
+            ID(k) = str2double(tk{1});
+            Path{k} = strtrim(tk{2});
+            Mode{k} = strtrim(tk{3});
+        else
+            % no match -> leave empty/NaN
+            ID(k) = NaN;
+            Path{k} = '';
+            Mode{k} = '';
+        end
+    end
+else
+    sendCmdToClient(app, app.tcpTF, "STRING:File:Selec?");
+    w84TF(app);
+    ID = 69;
+    Path = "EchoPath.tfp";
+    Mode = "EchoMode";
+end
+end
